@@ -27,3 +27,15 @@ $env:UV_CACHE_DIR = Join-Path (Get-Location) '.cache\uv'
 显式解释器确保使用项目环境。`PYTHONUTF8` 会传递给 `task.py` 启动的子进程，使原工程正确读写中文 JSONL。
 
 项目环境和缓存由 `.gitignore` 排除。Python 版本记录在 `.python-version`，uv 版本锁定在 `requirements-dev.txt`。
+
+## 一键复现实验
+
+先执行“每次运行”中的两个环境变量设置，再运行以下命令。
+
+```powershell
+& .\.venv\Scripts\uv.exe run --quiet --offline --no-project --python .\.venv\Scripts\python.exe python evals/candidate/experiment.py --verify-final
+```
+
+命令执行原契约及自建测试，从 `take-home-base` 加载原策略，生成公开及定向场景的baseline、A、B和最终方案。`runs/selection.json` 保存门槛、选择、测试日志位置、数据哈希和最终策略一致性核验。`runs/before/`、`runs/candidate_a/`、`runs/candidate_b/`、`runs/after/` 保存summary、quality和完整traces。候选目录的diffs逐条记录质量与成本时延变化；`runs/custom/` 单独保存定向反例。
+
+`--skip-tests` 仅供探索，输出会标记tests_unverified并选择baseline。最终验收使用上述完整命令。
