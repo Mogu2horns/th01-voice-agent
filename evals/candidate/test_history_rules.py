@@ -218,10 +218,86 @@ class HistoryRuleTests(unittest.TestCase):
         observed = request("检查其他设备。")
         self.assertFalse(extract_reference(observed).has_reference)
 
-    def test_unknown_history_is_not_interpreted_as_selection(self):
+    def test_unknown_history_defers_to_original_policies(self):
         observed = request("打开刚才那个。", ["用户：north_pad看起来很有意思。"])
-        self.assertIsNone(extract_reference(observed).target)
+        features = extract_reference(observed)
+        self.assertTrue(features.has_reference)
+        self.assertIsNone(features.target)
+        self.assertEqual(features.rule, "unsupported")
+        self.assertIsNone(model_override(observed))
+        self.assertIsNone(action_override(observed, prediction(("north_pad", 0.99))))
+
+    def test_valid_selection_after_unknown_history_restores_grounding(self):
+        observed = request(
+            "打开刚才那个。",
+            ["用户：north_pad看起来很有意思。", "用户：先选south_pad。"],
+        )
+        features = extract_reference(observed)
+        self.assertEqual(features.rule, "selection")
+        self.assertEqual(features.target, "south_pad")
+        self.assertEqual(model_override(observed), "standard")
+        self.assertEqual(
+            action_override(observed, prediction(("south_pad", 0.2))),
+            {"kind": "execute", "target": "south_pad"},
+        )
+
+    def test_side_question_after_unknown_history_preserves_fallback(self):
+        observed = request(
+            "打开刚才那个。",
+            [
+                "用户：north_pad看起来很有意思。",
+                "用户：顺便问下，south_pad也能用吗？",
+            ],
+        )
+        features = extract_reference(observed)
+        self.assertEqual(features.rule, "unsupported")
+        self.assertIsNone(features.target)
+        self.assertIsNone(model_override(observed))
+        self.assertIsNone(action_override(observed, prediction(("south_pad", 0.99))))
+
+    def test_neutral_or_deferred_statement_after_unknown_preserves_fallback(self):
+        for message in ("用户：好的。", "用户：先别执行。"):
+            with self.subTest(message=message):
+                observed = request(
+                    "打开刚才那个。",
+                    ["用户：north_pad看起来很有意思。", message],
+                )
+                features = extract_reference(observed)
+                self.assertEqual(features.rule, "unsupported")
+                self.assertIn("看起来", features.evidence)
+                self.assertIsNone(model_override(observed))
+                self.assertIsNone(action_override(observed, prediction(("north_pad", 0.99))))
+
+    def test_new_negation_after_unknown_is_recognized_as_unresolved(self):
+        observed = request(
+            "打开刚才那个。",
+            ["用户：north_pad看起来很有意思。", "用户：不要选north_pad。"],
+        )
+        features = extract_reference(observed)
+        self.assertEqual(features.rule, "unresolved")
+        self.assertIsNone(features.target)
         self.assertEqual(model_override(observed), "small")
+        self.assertEqual(
+            action_override(observed, prediction(("north_pad", 0.99))),
+            {"kind": "clarify"},
+        )
+
+    def test_unknown_statement_clears_previous_grounding_and_defers(self):
+        observed = request(
+            "打开刚才那个。",
+            ["用户：先选north_pad。", "用户：south_pad看起来很有意思。"],
+        )
+        features = extract_reference(observed)
+        self.assertEqual(features.rule, "unsupported")
+        self.assertIsNone(features.target)
+        self.assertIsNone(model_override(observed))
+        self.assertIsNone(action_override(observed, prediction(("north_pad", 0.99))))
+
+    def test_ordinal_with_unsupported_history_also_defers(self):
+        observed = request("打开前一个。", ["用户：north_pad看起来很有意思。"])
+        self.assertEqual(extract_reference(observed).rule, "unsupported")
+        self.assertIsNone(model_override(observed))
+        self.assertIsNone(action_override(observed, prediction(("north_pad", 0.99))))
 
     def test_missing_mode_and_busy_do_not_predict_user_response(self):
         normal = request()

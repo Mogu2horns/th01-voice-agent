@@ -4,7 +4,7 @@
 
 ## 输入特征
 
-`extract_reference(request)` 返回不可变 `ReferenceFeatures`，字段为 `has_reference`、`target`、`rule`、`evidence`。rule枚举为no_reference、unresolved、correction、selection、ordinal。evidence记录实际触发的用户子句或当前未消歧文本。
+`extract_reference(request)` 返回不可变 `ReferenceFeatures`，字段为 `has_reference`、`target`、`rule`、`evidence`。rule枚举为no_reference、unresolved、unsupported、correction、selection、ordinal。evidence记录实际触发的用户子句或当前未消歧文本。
 
 当前文本包含那个、这个、那盏/台/扇、刚才、之前、先前、前后顺序、定好的/改好的，以及受动词或标点约束的它/他/她时进行核验。其他中的他不构成指代。普通无指代文本交原策略。
 
@@ -17,15 +17,22 @@
 - 目标标识支持Unicode字词、数字、下划线及短横线。尾部语气词、额外定语或未知句式不会被强行裁剪为目标。
 - 先别执行、还不要执行等延迟子句保留已选择目标，等待当前请求确认执行。
 - 考虑A和B或A和B都可能要用等结构保存两个不同目标的提及顺序。当前前一个/第一个/前者及后一个/第二个/后者必须唯一指定一端。新选择使旧顺序表失效。
-- 否定、撤销、取消、含可能/也许/如果/还是/或者等含糊的新意图使旧选择失效。未识别的用户陈述也使旧依据失效，明确旁问和列出的延迟/中性应答除外。
+- 否定、撤销、取消、含可能/也许/如果/还是/或者等已识别含糊新意图使旧选择失效，并标为unresolved。未识别的用户陈述使旧依据失效并标为unsupported，明确旁问和列出的延迟/中性应答除外。
+- unsupported之后的问句、延迟和中性应答保持unsupported。后续有效选择或修正可以重新建立目标，已识别的新否定、取消、含糊选择或二项选项可以转为unresolved。当前顺序指代缺乏可用顺序表时，也保留未知历史的unsupported来源。
 - 当前指代文本带取消、不要执行等意图时视为未消歧，进入澄清。支持范围之外的普通文本交原策略。
 
 ## 路由与动作
 
-路由只接管low且explicit_target为None的请求。有指代且解析到历史目标时选standard，未消歧时选small。模型选择发生于得到候选之前。
+路由只接管low且explicit_target为None的请求。有指代且解析到历史目标时选standard，已识别但未消歧时选small。unsupported交原始路由。模型选择发生于得到候选之前。
 
-动作在同样的低风险边界内核验。匹配的历史目标存在于当前候选时执行，缺失则澄清。未消歧指代由ambiguity_guard控制澄清。high或明确目标由原动作保障处理。
+动作在同样的低风险边界内核验。匹配的历史目标存在于当前候选时执行，缺失则澄清。已识别但未消歧的指代由ambiguity_guard控制澄清。unsupported交原始动作策略，high或明确目标由原动作保障处理。
 
 correction、selection、ordinal分别控制对应动作规则，关闭时交原动作策略。四项消融开关不改变特征提取或模型路由。关闭ambiguity_guard仅取消未消歧澄清规则。
 
 该有限文法不能从同一可观察信号恢复所有真实意图。未覆盖句式、单个模型候选遗漏或错误、澄清无回应，都必须在实验中分别报告。
+
+## 首版验证后的覆盖边界修订
+
+首版冻结提交1736f91将未知历史语法与已识别的指代依据不足均标为unresolved，因此统一改用small并澄清。独立合成验证发现其完成数比原始基线少1，原有回退选择受到反证。
+
+修订计划已先在f78c3db提交。本次只增加解析覆盖状态unsupported，使有限文法范围外的历史交原始模型和动作处理，空历史或已识别的否定、取消、多选继续使用原unresolved规则。没有增加目标名称、场景标识或新的匹配文法。原始结果保留，修订规则冻结后再评估新的独立确认场景。

@@ -26,6 +26,8 @@ PREVIOUS_COMMIT = "67570fd9578973bb779dcb2818221e791638c5cf"
 FROZEN_VALIDATION = {
     "heldout_scenarios.jsonl": "de0a18a6fb82cd2a6800d37a9281ce48f075af4bf7dafc70e0ffa359dfefbfa3",
     "heldout_scenarios.md": "df63d11017f76d3ef50cff8b97c9155a3a1cb992c6f5aba39c044b9f62122c41",
+    "confirmation_scenarios.jsonl": "2da5bfcee6ace3e15fef739c82e2dc2a08880d196cef552bfbf39f7e61a631e6",
+    "confirmation_scenarios.md": "a33f69942c4daf04f274d8911e0d10a28d903de109ace64642aac0e3e447bf83",
 }
 COMPONENTS = ("correction", "selection", "ordinal", "ambiguity_guard")
 VARIANTS = {
@@ -37,7 +39,39 @@ VARIANTS = {
         f"without_{component}": {"routing": True, "actions": True, "disabled": component}
         for component in COMPONENTS
     },
+    "without_parser_fallback": {
+        "routing": True, "actions": True, "disabled": None, "parser_fallback": False,
+    },
 }
+
+
+def route_override(request, configuration):
+    if not configuration["routing"]:
+        return None
+    features = rules.extract_reference(request)
+    if (
+        not configuration.get("parser_fallback", True)
+        and features.rule == "unsupported"
+        and request["risk"] == "low"
+        and request["explicit_target"] is None
+    ):
+        return "small"
+    return rules.model_override(request)
+
+
+def decision_override(request, prediction, configuration):
+    if not configuration["actions"]:
+        return None
+    features = rules.extract_reference(request)
+    if (
+        not configuration.get("parser_fallback", True)
+        and features.rule == "unsupported"
+        and request["risk"] == "low"
+        and request["explicit_target"] is None
+    ):
+        return {"kind": "clarify"}
+    options = {component: component != configuration["disabled"] for component in COMPONENTS}
+    return rules.action_override(request, prediction, **options)
 
 
 def make_variants():
@@ -45,14 +79,11 @@ def make_variants():
     policies = {}
     for name, configuration in VARIANTS.items():
         def select(request, configuration=configuration):
-            override = rules.model_override(request) if configuration["routing"] else None
+            override = route_override(request, configuration)
             return override if override is not None else baseline.select_model(request)
 
         def decide(request, prediction, configuration=configuration):
-            override = None
-            if configuration["actions"]:
-                options = {component: component != configuration["disabled"] for component in COMPONENTS}
-                override = rules.action_override(request, prediction, **options)
+            override = decision_override(request, prediction, configuration)
             return override if override is not None else baseline.choose_action(request, prediction)
 
         policies[name] = SimpleNamespace(
@@ -68,24 +99,47 @@ def make_variants():
     return baseline, policies
 
 
-def audit_history(output):
+def audit_history(output, baseline):
     source = ROOT / "data/history_sessions.jsonl"
     sessions = [json.loads(line) for line in source.read_text(encoding="utf-8").split("\n") if line]
     details = []
     signals = {}
     feature_counts = {}
+    original_context_conflicts = 0
+    proposed_context_conflicts = 0
     for line_number, session in enumerate(sessions, 1):
         features = asdict(rules.extract_reference(session["observation"]))
         feature_counts[features["rule"]] = feature_counts.get(features["rule"], 0) + 1
         observed_signals = [event["signal"] for event in session["events"] if event["type"] == "user_signal"]
         for signal in observed_signals:
             signals[signal] = signals.get(signal, 0) + 1
+        request = session["observation"]
+        prediction = session["events"][0]["prediction"]
+        proposed_action = rules.action_override(request, prediction)
+        if proposed_action is None:
+            proposed_action = baseline.choose_action(request, prediction)
+        proposed_model = rules.model_override(request)
+        if proposed_model is None:
+            proposed_model = baseline.select_model(request)
+        context_conflict = features["target"] is not None and any(
+            commit["target"] != features["target"] for commit in session["commits"]
+        )
+        proposed_conflict = (
+            features["target"] is not None and proposed_action["kind"] == "execute"
+            and proposed_action["target"] != features["target"]
+        )
+        original_context_conflicts += context_conflict
+        proposed_context_conflicts += proposed_conflict
         details.append({
             "source_line": line_number, "id": session["id"],
             "observation": session["observation"], "features": features,
             "observed_model": session["events"][0]["model"],
             "clarified": session["clarified"], "acknowledged": session["acknowledged"],
             "commits": session["commits"], "observed_signals": observed_signals,
+            "proposed_model": proposed_model,
+            "proposed_action_on_observed_prediction": proposed_action,
+            "observed_commit_conflicts_with_parsed_history": context_conflict,
+            "proposed_action_conflicts_with_parsed_history": proposed_conflict,
         })
     audit = {
         "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
@@ -93,6 +147,8 @@ def audit_history(output):
         "acknowledged": sum(item["acknowledged"] for item in sessions),
         "no_commit": sum(not item["commits"] for item in sessions),
         "observed_signals": signals, "derived_feature_counts": feature_counts,
+        "observed_context_conflicts": original_context_conflicts,
+        "proposed_context_conflicts_on_recorded_prediction": proposed_context_conflicts,
         "scope": "Observed behavior and derived syntax only. No world labels or counterfactual model outputs are available.",
     }
     _write_json(output / "history_audit.json", audit)
@@ -104,14 +160,11 @@ def _explain(scene, trace, configuration):
     request = scene["observation"]
     features = rules.extract_reference(request)
     prediction = trace["events"][0]["prediction"]
-    action = None
-    if configuration and configuration["actions"]:
-        options = {component: component != configuration["disabled"] for component in COMPONENTS}
-        action = rules.action_override(request, prediction, **options)
+    action = decision_override(request, prediction, configuration) if configuration else None
     return {
         "id": scene["id"], "features": asdict(features),
         "selected_model": trace["events"][0]["model"],
-        "route_override": rules.model_override(request) if configuration and configuration["routing"] else None,
+        "route_override": route_override(request, configuration) if configuration else None,
         "action_override": action,
         "fallback_to_baseline_action": action is None,
     }
@@ -150,6 +203,10 @@ def _effects(results):
         }
         for component in COMPONENTS
     }
+    components["parser_fallback"] = {
+        measure: round(measures["full"][measure] - measures["without_parser_fallback"][measure], 8)
+        for measure in measures["full"]
+    }
     return {"factorial": factorial, "full_minus_component_removed": components}
 
 
@@ -164,6 +221,7 @@ def evaluate(output, verify_final=False):
         "public": ROOT / "data/public_scenarios.jsonl",
         "known_counterexamples": ROOT / "evals/candidate/routing_scenarios.jsonl",
         "heldout": ROOT / "evals/candidate/heldout_scenarios.jsonl",
+        "confirmation": ROOT / "evals/candidate/confirmation_scenarios.jsonl",
     }
     datasets = {name: _load_scenes(path) for name, path in paths.items()}
     tests = _run_tests(output)
@@ -198,7 +256,7 @@ def evaluate(output, verify_final=False):
                 or (not row["before"]["duplicate_nonidempotent"] and row["after"]["duplicate_nonidempotent"])
                 for row in paired
             )
-        for dataset in ("known_counterexamples", "heldout"):
+        for dataset in ("known_counterexamples", "heldout", "confirmation"):
             quality = results[dataset][name]
             original = results[dataset]["baseline"]
             checks[f"completion_noninferior_{dataset}"] = quality["correct"]["numerator"] >= original["correct"]["numerator"]
@@ -240,7 +298,13 @@ def evaluate(output, verify_final=False):
         "implementation_commit": subprocess.check_output(["git", "-C", str(ROOT), "rev-parse", "HEAD"], encoding="utf-8").strip(),
         "source_sha256": {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest() for path in source_files},
         "data": fingerprints, "frozen_validation_sha256": FROZEN_VALIDATION,
-        "history": audit_history(output),
+        "data_roles": {
+            "public": "Previously observed public development workload",
+            "known_counterexamples": "Previously observed directed counterexamples",
+            "heldout": "Independent first validation, now diagnostic after round-one rejection",
+            "confirmation": "Fresh independently authored synthetic confirmation after parser-fallback revision",
+        },
+        "history": audit_history(output, baseline),
         "gates": gates,
         "results": {dataset: {name: _counts(quality) for name, quality in variants.items()} for dataset, variants in results.items()},
         "effects": {dataset: _effects(variants) for dataset, variants in results.items()},

@@ -86,8 +86,10 @@ def extract_reference(request):
                 options, evidence = None, clause
                 continue
             if not (DEFER.fullmatch(clause) or NEUTRAL.fullmatch(clause)):
-                target, rule, options, evidence = None, "unresolved", None, clause
+                target, rule, options, evidence = None, "unsupported", None, clause
 
+    if rule == "unsupported":
+        return ReferenceFeatures(True, None, rule, evidence)
     first = FIRST.search(text) is not None
     second = SECOND.search(text) is not None
     if first or second:
@@ -102,7 +104,7 @@ def model_override(request):
     if request["risk"] != "low" or request["explicit_target"] is not None:
         return None
     reference = extract_reference(request)
-    if not reference.has_reference:
+    if not reference.has_reference or reference.rule == "unsupported":
         return None
     return "standard" if reference.target is not None else "small"
 
@@ -115,7 +117,7 @@ def action_override(
     if request["risk"] != "low" or request["explicit_target"] is not None:
         return None
     reference = extract_reference(request)
-    if not reference.has_reference:
+    if not reference.has_reference or reference.rule == "unsupported":
         return None
     if reference.target is None:
         return {"kind": "clarify"} if ambiguity_guard else None
