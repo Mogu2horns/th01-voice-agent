@@ -30,6 +30,7 @@ FROZEN_VALIDATION = {
     "confirmation_scenarios.md": "a33f69942c4daf04f274d8911e0d10a28d903de109ace64642aac0e3e447bf83",
 }
 COMPONENTS = ("correction", "selection", "ordinal", "ambiguity_guard")
+ADOPTION_CANDIDATES = ("routing_only", "action_only", "full")
 VARIANTS = {
     "baseline": {"routing": False, "actions": False, "disabled": None},
     "routing_only": {"routing": True, "actions": False, "disabled": None},
@@ -274,7 +275,7 @@ def evaluate(output, verify_final=False):
             results["public"][name]["p95_latency_ms"], complexity,
         )
 
-    eligible = [name for name, gate in gates.items() if gate["passed"]]
+    eligible = [name for name in ADOPTION_CANDIDATES if gates[name]["passed"]]
     selected = min(eligible, key=priority) if eligible else "baseline"
     for dataset, scenes in datasets.items():
         _save_run(output / "after" / dataset, scenes, traces[dataset][selected], traces[dataset]["baseline"])
@@ -290,11 +291,19 @@ def evaluate(output, verify_final=False):
         name: {"sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "scenarios": len(datasets[name])}
         for name, path in paths.items()
     }
-    source_files = [Path(__file__).resolve(), ROOT / "voice_agent/rules.py"]
+    source_files = [
+        Path(__file__).resolve(), ROOT / "voice_agent/rules.py",
+        ROOT / "voice_agent/policy.py", ROOT / "evals/candidate/rule_spec.md",
+    ]
     summary = {
         "selected": selected, "configuration": VARIANTS[selected],
+        "status": "verified" if tests_passed else "tests_failed",
+        "adoption_candidates": ADOPTION_CANDIDATES,
+        "component_ablation_role": "Diagnostic controls for declared capabilities, excluded from product candidate selection.",
         "tests_passed": tests_passed, "tests": tests,
-        "baseline_commit": baseline.BASELINE_COMMIT, "previous_commit": PREVIOUS_COMMIT,
+        "baseline_commit": baseline.BASELINE_COMMIT,
+        "baseline_source_sha256": baseline.BASELINE_SOURCE_SHA256,
+        "previous_commit": PREVIOUS_COMMIT,
         "implementation_commit": subprocess.check_output(["git", "-C", str(ROOT), "rev-parse", "HEAD"], encoding="utf-8").strip(),
         "source_sha256": {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest() for path in source_files},
         "data": fingerprints, "frozen_validation_sha256": FROZEN_VALIDATION,
@@ -313,6 +322,12 @@ def evaluate(output, verify_final=False):
         "reproduction_command": [sys.executable, str(Path(__file__).resolve()), "--out", str(output)] + (["--verify-final"] if verify_final else []),
     }
     _write_json(output / "ablation.json", summary)
+    if output == (ROOT / "runs/ablation").resolve():
+        public_scenes = datasets["public"]
+        original = traces["public"]["baseline"]
+        _save_run(ROOT / "runs/before", public_scenes, original, original)
+        _save_run(ROOT / "runs/after", public_scenes, traces["public"][selected], original)
+        _write_json(ROOT / "runs/selection.json", summary)
     return summary
 
 

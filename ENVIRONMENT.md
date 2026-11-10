@@ -33,9 +33,21 @@ $env:UV_CACHE_DIR = Join-Path (Get-Location) '.cache\uv'
 先执行“每次运行”中的两个环境变量设置，再运行以下命令。
 
 ```powershell
-& .\.venv\Scripts\uv.exe run --quiet --offline --no-project --python .\.venv\Scripts\python.exe python evals/candidate/experiment.py --verify-final
+& .\.venv\Scripts\uv.exe run --quiet --offline --no-project --python .\.venv\Scripts\python.exe python evals/candidate/ablation.py --verify-final
 ```
 
-命令执行原契约及自建测试，从 `take-home-base` 加载原策略，生成公开及定向场景的baseline、A、B和最终方案。`runs/selection.json` 保存门槛、选择、测试日志位置、数据哈希和最终策略一致性核验。`runs/before/`、`runs/candidate_a/`、`runs/candidate_b/`、`runs/after/` 保存summary、quality和完整traces。候选目录的diffs逐条记录质量与成本时延变化；`runs/custom/` 单独保存定向反例。
+命令执行原契约及自建测试，从 `take-home-base` 加载原策略，完成路由与动作2×2实验、四项动作组件消融及解析回退消融。每组分别重放公开100条、已看反例18条、首个独立集32条和新确认集24条，先核验独立数据冻结哈希。
 
-`--skip-tests` 仅供探索，输出会标记tests_unverified并选择baseline。最终验收使用上述完整命令。
+`runs/ablation/ablation.json` 保存全部指标、门槛、源码/数据哈希、测试日志位置、效应和最终入口一致性。各集合、各方案的summary、quality、完整traces、diffs和规则解释decisions分别保存。默认命令同步生成 `runs/before/`、`runs/after/` 和 `runs/selection.json`。
+
+`runs/ablation_round1/` 保存未通过首个独立集的规则实验，`runs/ablation_selection_diagnostic/` 保存采用集合澄清前的选择记录。正式主矩阵候选为仅路由、仅动作和完整方案，组件移除仅解释贡献。
+
+## 第一轮实验回放
+
+第一轮历史版本和原有候选可使用以下命令独立复算，结果写入单独目录。
+
+```powershell
+& .\.venv\Scripts\uv.exe run --quiet --offline --no-project --python .\.venv\Scripts\python.exe python evals/candidate/experiment.py --out runs/routing_v1_replay
+```
+
+`runs/routing_v1/` 保留第一轮原始结果。该轮的 `--skip-tests` 仅供探索，其输出标记tests_unverified并选择baseline。

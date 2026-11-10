@@ -1,12 +1,11 @@
 """Current production policies: safe high-risk handling and basic routing already work."""
+from voice_agent.rules import action_override, model_override
+
+
 def select_model(request):
-    if (
-        request['risk'] == 'low'
-        and request['explicit_target'] is None
-        and not request['history']
-        and request.get('interaction_mode', 'normal') in ('normal', 'busy')
-    ):
-        return 'small'
+    override = model_override(request)
+    if override is not None:
+        return override
     if request['risk'] == 'high' and request['explicit_target'] is None:
         return 'small'
     if request['explicit_target']:
@@ -17,6 +16,9 @@ def select_model(request):
 
 
 def choose_action(request, prediction):
+    override = action_override(request, prediction)
+    if override is not None:
+        return override
     ranked = sorted(prediction['candidates'], key=lambda c: c['confidence'], reverse=True)
     if request['risk'] == 'high' and request['explicit_target'] is None:
         return {'kind': 'clarify'}

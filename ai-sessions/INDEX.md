@@ -32,3 +32,21 @@
 ```
 
 本次已核验导出记录数、全部JSONL解析、文件SHA256、父子范围和脱敏后的字段完整性，另以Unicode行分隔符和脱敏内容进行回归检查。可导出范围内的记录未作摘要或节选。当前快照之后的新消息以原生来源及刷新结果为准。
+
+## 第二轮历史规则与消融
+
+主会话ordinal797为用户要求基于history规则优化并消融的原始指令。以下分支继续纳入完整原生归档，实际文件名、顺序、父子关系和截止记录仍以manifest为准。
+
+| 工作分支 | 用途与实际产出 |
+|---|---|
+| /root/mine_history_rules | 全量历史观察，区分真实反馈与无法判定的意图，提出有限假设 |
+| /root/author_blind_validation | fork_turns=none，仅按原契约独立创建32条验证及人工oracle |
+| /root/implement_history_rules | 有限文法、模型与动作override，首版失败后按追加规格修订unsupported回退 |
+| /root/test_history_rules | 独立规格测试与状态回退回归，未读验证集合 |
+| /root/author_confirmation_validation | fork_turns=none，独立创建新24条合成验收，规则冻结后才评估 |
+| /root/review_history_ablation | 实际代码、组件隔离、原契约与报告边界审查 |
+| /root/review_history_ablation/audit_frozen_data | 核验四个冻结文件哈希、数据契约与人工oracle |
+
+关键判断可交叉核验EVAL_PLAN的b900e25、f78c3db、34e0acd及后续追加。首版23/32引发撤回，未知语法改为原策略回退；采用集合在见到结果后澄清，初次without_correction结果也完整留存。这些失败、选择调整和独立覆盖限制均保留在主会话、分支记录及ABLATION_REPORT中。
+
+2026-11-10 16:34一次快照包含17个工作会话、5298条原生记录。后续刷新会增加记录数，唯一当前截止以raw/manifest.json为准。主会话跨两题及全部工作分支的全文继续按完整性要求归档。
